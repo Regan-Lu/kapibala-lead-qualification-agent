@@ -4,7 +4,7 @@ A small, auditable agent that uses an LLM for lead-intent analysis while enforci
 
 ## Current phase
 
-Phases 0 through 6 are implemented:
+Phases 0 through 7 are implemented:
 
 - runnable FastAPI project skeleton and health endpoint;
 - closed enums for the five intents, four allowed actions, and conversation states;
@@ -22,6 +22,8 @@ Phases 0 through 6 are implemented:
 - customer-facing conversation endpoints and token-protected operator controls.
 - a framework-free browser demo for chat, state inspection, events, scenarios,
   and operator actions.
+- reproducible live-model adversarial scenarios and a real multi-process
+  rolling-limit probe with public-safe evidence output.
 
 The LLM output is treated as an untrusted proposal. `proposed_action` is never
 executed directly. `handle_analysis` returns a policy-approved
@@ -125,7 +127,8 @@ top-level `response_format` contract: [Interactions API reference](https://ai.go
 [API versions](https://ai.google.dev/gemini-api/docs/api-versions), and
 [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output).
 
-Adversarial execution evidence is intentionally deferred to Phases 7–8.
+The reproducible adversarial run and its reviewed results are documented in
+[`evidence/phase7-adversarial-results.md`](evidence/phase7-adversarial-results.md).
 
 ## Phase 5 conversation API
 
@@ -240,6 +243,50 @@ reply-producing question 24 seconds later produced `rate_limited`,
 `message_sent: false`, and no Agent bubble. The persisted event list showed
 both outcomes. The default desktop layout and a 390 x 844 viewport rendered
 without clipping or console errors.
+
+## Phase 7 adversarial evidence
+
+The live suite exercises unauthorized-action injection, internal-information
+extraction, consecutive dissatisfied turns, customer-side takeover bypass,
+and the 59.9/60-second rolling-window boundary. It uses the configured Gemini
+model through the complete API path, a temporary SQLite database, and a
+controllable application clock. It does not mutate the browser demo database.
+
+```bash
+set -a
+source .env
+set +a
+python scripts/run_adversarial_scenarios.py
+```
+
+Its JSON output contains only validated response fields plus whether a reply
+was present and its character count. Generated reply text, model requests,
+decision notes, review notes, credentials, exception details, and local paths
+are not printed. Live classifications can vary as the hosted model changes;
+a scenario-level `FAIL` means the exact target observation was not reproduced
+in that run, not automatically that a deterministic constraint was bypassed.
+
+The separate concurrency probe needs no model credential. It synchronizes
+eight spawned processes, each with an independent SQLite connection, then
+routes every attempt through the real `ActionExecutor` and `OutboundGateway`:
+
+```bash
+python scripts/run_concurrency_probe.py
+```
+
+Transient stale revisions are retried from freshly loaded state and reported
+separately from the terminal result. A passing run must converge to exactly one
+`sent`, seven `rate_limited`, and one `message_sent: true`. This isolates the
+code-level limiter from nondeterministic model choices while still attacking
+the actual persistence and sending boundary.
+
+On 2026-09-02 the live suite passed all five scenarios with seven analysis
+calls and five reply-review calls, with no model-call failures. The
+multi-process probe produced one sent turn and seven rate-limited turns, with
+zero duplicate sends, and the full deterministic suite reported 91 passed.
+Exact prompts, public response fields, the initially ambiguous observations
+that were corrected, and known limits are recorded in the linked evidence
+document.
 
 ## Local setup
 
