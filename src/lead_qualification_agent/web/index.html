@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="KapibalaAI lead qualification agent constraint demo"
+    >
+    <title>Lead Qualification Lab</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="app-header">
+        <a class="brand" href="/" aria-label="Lead Qualification Lab 首页">
+          <span class="brand-mark" aria-hidden="true">K</span>
+          <span>
+            <strong>Lead Qualification Lab</strong>
+            <small>Guarded agent constraint demo</small>
+          </span>
+        </a>
+        <div
+          class="health-chip is-checking"
+          id="healthChip"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="health-dot" aria-hidden="true"></span>
+          <span id="healthText">正在连接 API</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel conversation-panel" aria-labelledby="chatTitle">
+          <div class="panel-heading chat-heading">
+            <div>
+              <p class="eyebrow">Customer simulator</p>
+              <h1 id="chatTitle">模拟客户对话</h1>
+              <p class="panel-description">
+                每条消息都经过模型分析、独立回复审查、确定性状态机与统一发送出口。
+              </p>
+            </div>
+            <div class="customer-control">
+              <label for="customerId">Customer ID</label>
+              <div class="input-action-row">
+                <input
+                  id="customerId"
+                  name="customer_id"
+                  value="demo-001"
+                  maxlength="128"
+                  autocomplete="off"
+                  spellcheck="false"
+                >
+                <button class="button button-secondary" id="loadButton" type="button">
+                  切换
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="transcript"
+            id="transcript"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions"
+          >
+            <div class="empty-state" id="transcriptEmpty">
+              <span class="empty-orbit" aria-hidden="true"></span>
+              <strong>从一条消息开始验证</strong>
+              <p>
+                下方快捷语句只会填入输入框，不会自动发送。真正发送的回复才会显示为
+                Agent 气泡。
+              </p>
+            </div>
+          </div>
+
+          <div class="scenario-area">
+            <div class="section-label-row">
+              <span class="section-label">快捷场景</span>
+              <span class="microcopy">点击填入，可继续编辑</span>
+            </div>
+            <div class="scenario-list" aria-label="预置测试语句">
+              <button class="scenario-chip" type="button" data-preset="normal">
+                正常询问
+              </button>
+              <button class="scenario-chip" type="button" data-preset="overreach">
+                越权动作
+              </button>
+              <button class="scenario-chip" type="button" data-preset="disclosure">
+                套取内部信息
+              </button>
+              <button class="scenario-chip" type="button" data-preset="off_topic">
+                答非所问
+              </button>
+              <button class="scenario-chip" type="button" data-preset="dissatisfied">
+                明显不满
+              </button>
+              <button class="scenario-chip" type="button" data-preset="self_reactivate">
+                客户自行恢复
+              </button>
+            </div>
+          </div>
+
+          <form class="composer" id="messageForm">
+            <label class="visually-hidden" for="messageInput">客户消息</label>
+            <textarea
+              id="messageInput"
+              name="message"
+              rows="4"
+              maxlength="4000"
+              placeholder="输入客户消息…"
+              required
+            ></textarea>
+            <div class="composer-footer">
+              <span>Enter 发送 · Shift + Enter 换行</span>
+              <button class="button button-primary" id="sendButton" type="submit">
+                <span>发送消息</span>
+                <span class="button-arrow" aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="inspector" aria-label="约束观察台">
+          <section class="panel state-panel" aria-labelledby="stateTitle">
+            <div class="panel-heading compact-heading">
+              <div>
+                <p class="eyebrow">Constraint inspector</p>
+                <h2 id="stateTitle">约束观察台</h2>
+              </div>
+              <button
+                class="icon-button"
+                id="refreshButton"
+                type="button"
+                aria-label="刷新会话状态"
+                title="刷新会话状态"
+              >
+                ↻
+              </button>
+            </div>
+
+            <div class="status-hero">
+              <span class="status-label">Conversation status</span>
+              <span class="status-badge status-empty" id="statusBadge">
+                尚未开始
+              </span>
+            </div>
+
+            <div class="issue-meter" aria-label="连续异常计数">
+              <div class="section-label-row">
+                <span class="section-label">连续异常</span>
+                <strong id="issueValue">0 / 2</strong>
+              </div>
+              <div class="meter-track" aria-hidden="true">
+                <span class="meter-segment" id="issueSegmentOne"></span>
+                <span class="meter-segment" id="issueSegmentTwo"></span>
+              </div>
+            </div>
+
+            <dl class="telemetry-grid">
+              <div>
+                <dt>Intent</dt>
+                <dd id="intentValue">—</dd>
+              </div>
+              <div>
+                <dt>Dissatisfied</dt>
+                <dd id="dissatisfiedValue">—</dd>
+              </div>
+              <div>
+                <dt>Approved action</dt>
+                <dd id="actionValue">—</dd>
+              </div>
+              <div>
+                <dt>Outcome</dt>
+                <dd id="outcomeValue">—</dd>
+              </div>
+              <div>
+                <dt>Revision</dt>
+                <dd id="revisionValue">—</dd>
+              </div>
+              <div>
+                <dt>Actually sent</dt>
+                <dd id="sentValue">—</dd>
+              </div>
+            </dl>
+
+            <div
+              class="outcome-notice is-neutral"
+              id="outcomeNotice"
+              role="status"
+              aria-live="polite"
+            >
+              等待第一条客户消息。
+            </div>
+          </section>
+
+          <section class="panel events-panel" aria-labelledby="eventsTitle">
+            <div class="panel-heading compact-heading">
+              <div>
+                <p class="eyebrow">Persisted audit trail</p>
+                <h2 id="eventsTitle">最近事件</h2>
+              </div>
+              <span class="event-count" id="eventCount">0</span>
+            </div>
+            <ol class="event-list" id="eventList">
+              <li class="event-empty">还没有持久化事件</li>
+            </ol>
+          </section>
+
+          <section class="panel operator-panel" aria-labelledby="operatorTitle">
+            <div class="panel-heading compact-heading">
+              <div>
+                <p class="eyebrow">Trusted operator</p>
+                <h2 id="operatorTitle">人工操作</h2>
+              </div>
+            </div>
+
+            <label for="operatorToken">Operator token</label>
+            <div class="token-row">
+              <input
+                id="operatorToken"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="仅保留在当前页面"
+              >
+              <button
+                class="icon-button"
+                id="clearTokenButton"
+                type="button"
+                aria-label="清除 operator token"
+                title="清除令牌"
+              >
+                ×
+              </button>
+            </div>
+
+            <div class="operator-actions">
+              <button
+                class="button button-secondary"
+                id="reactivateButton"
+                type="button"
+                disabled
+              >
+                人工重新激活
+              </button>
+              <button class="button button-danger" id="resetButton" type="button">
+                重置所有演示数据
+              </button>
+            </div>
+            <p class="operator-note">
+              Token 只通过请求头发送，刷新即清空。全局重置仅应在没有其他请求进行时使用。
+            </p>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="app-footer">
+        <p>
+          对话气泡仅存在于当前浏览器页面；服务端只持久化会话状态与动作事件。
+        </p>
+        <a href="/docs" target="_blank" rel="noreferrer">OpenAPI docs ↗</a>
+      </footer>
+    </div>
+  </body>
+</html>

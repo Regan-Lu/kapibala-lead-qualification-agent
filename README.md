@@ -4,7 +4,7 @@ A small, auditable agent that uses an LLM for lead-intent analysis while enforci
 
 ## Current phase
 
-Phases 0 through 5 are implemented:
+Phases 0 through 6 are implemented:
 
 - runnable FastAPI project skeleton and health endpoint;
 - closed enums for the five intents, four allowed actions, and conversation states;
@@ -20,6 +20,8 @@ Phases 0 through 5 are implemented:
 - one `ConversationService` path from inbound text through guarded analysis,
   deterministic policy, persistence, and action execution;
 - customer-facing conversation endpoints and token-protected operator controls.
+- a framework-free browser demo for chat, state inspection, events, scenarios,
+  and operator actions.
 
 The LLM output is treated as an untrusted proposal. `proposed_action` is never
 executed directly. `handle_analysis` returns a policy-approved
@@ -123,8 +125,7 @@ top-level `response_format` contract: [Interactions API reference](https://ai.go
 [API versions](https://ai.google.dev/gemini-api/docs/api-versions), and
 [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output).
 
-A browser UI and adversarial execution evidence are intentionally deferred to
-Phases 6–8.
+Adversarial execution evidence is intentionally deferred to Phases 7–8.
 
 ## Phase 5 conversation API
 
@@ -132,6 +133,7 @@ The API surface is deliberately small:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/` | Open the native browser demo. |
 | `GET` | `/health` | Process health; does not require Gemini configuration. |
 | `POST` | `/conversations/{customer_id}/messages` | Submit one customer message through the complete guarded path. |
 | `GET` | `/conversations/{customer_id}` | Read an existing conversation snapshot and recent action outcomes. |
@@ -207,6 +209,37 @@ full prior dialogue history. Session state, action outcomes, and the simulated
 outbound channel are sufficient for the constraint-focused demo; durable
 multi-turn message history is deferred rather than accepted from an
 untrusted caller.
+
+## Phase 6 browser demo
+
+`GET /` serves a framework-free three-file UI: `index.html`, `styles.css`, and
+`app.js`. The page combines a customer chat simulator, constraint inspector,
+persisted event list, editable scenario shortcuts, and operator controls.
+Scenario buttons only fill the composer; the user still decides whether to
+send. After starting the service, open `http://127.0.0.1:8000/`.
+
+The operator token uses a password input and is sent only in the
+`X-Operator-Token` header for operator requests. The UI does not write it to
+local storage, session storage, or cookies, and clears the field when the page
+is shown. Conversation bubbles are likewise page-local.
+
+The transcript renders an Agent bubble only when the API returns both
+`message_sent: true` and a non-empty `reply`. Rate limiting, scheduling,
+escalation, closure, silence, stale results, and failures are rendered as
+system/status messages instead of simulated Agent speech. An HTTP 409 displays
+the stale-state result and refreshes the snapshot; it never automatically
+replays the customer message. Global demo reset asks for confirmation and is
+intended for use only while no other request is in flight.
+
+The three web assets are included in the installed distribution through
+setuptools package-data and served from the package directory.
+
+On 2026-09-02 the page was exercised against the live local service in a
+browser. A public product question produced a reviewed `sent` reply; a second
+reply-producing question 24 seconds later produced `rate_limited`,
+`message_sent: false`, and no Agent bubble. The persisted event list showed
+both outcomes. The default desktop layout and a 390 x 844 viewport rendered
+without clipping or console errors.
 
 ## Local setup
 

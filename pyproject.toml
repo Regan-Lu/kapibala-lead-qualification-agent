@@ -26,3 +26,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lead_qualification_agent = ["web/*.html", "web/*.css", "web/*.js"]

@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Path, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Path as ApiPath,
+    Response,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from lead_qualification_agent.adapters import (
     GeminiAnalyzer,
@@ -31,9 +42,10 @@ from lead_qualification_agent.domain import Action, ConversationStatus, Intent
 
 DEFAULT_DATABASE_PATH = "lead_qualification_agent.db"
 OPERATOR_TOKEN_HEADER = "X-Operator-Token"
+WEB_DIRECTORY = Path(__file__).with_name("web")
 CustomerId = Annotated[
     str,
-    Path(min_length=1, max_length=128, pattern=r".*\S.*"),
+    ApiPath(min_length=1, max_length=128, pattern=r".*\S.*"),
 ]
 
 
@@ -162,6 +174,11 @@ def create_app(
         title="KapibalaAI Lead Qualification Agent",
         version="0.1.0",
     )
+    api.mount(
+        "/static",
+        StaticFiles(directory=WEB_DIRECTORY),
+        name="static",
+    )
     configured_service = service
     configured_operator_token = (
         os.getenv("OPERATOR_TOKEN", "").strip()
@@ -201,6 +218,13 @@ def create_app(
     @api.get("/health", tags=["system"])
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @api.get("/", include_in_schema=False)
+    def demo_ui() -> FileResponse:
+        return FileResponse(
+            WEB_DIRECTORY / "index.html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @api.post(
         "/conversations/{customer_id}/messages",
