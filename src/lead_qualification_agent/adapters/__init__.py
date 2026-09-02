@@ -6,7 +6,9 @@ from lead_qualification_agent.adapters.gemini import (
     GeminiReplyGuard,
     GeminiSettings,
 )
+from lead_qualification_agent.adapters.outbound import InMemoryOutboundSender
 from lead_qualification_agent.adapters.sqlite import (
+    DemoResetResult,
     EventOutcome,
     SQLiteSessionStore,
     StorageActionResult,
@@ -19,6 +21,8 @@ __all__ = [
     "GeminiInteractionClient",
     "GeminiReplyGuard",
     "GeminiSettings",
+    "InMemoryOutboundSender",
+    "DemoResetResult",
     "EventOutcome",
     "SQLiteSessionStore",
     "StorageActionResult",

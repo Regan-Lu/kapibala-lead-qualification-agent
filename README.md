@@ -4,7 +4,7 @@ A small, auditable agent that uses an LLM for lead-intent analysis while enforci
 
 ## Current phase
 
-Phases 0 through 4 are implemented:
+Phases 0 through 5 are implemented:
 
 - runnable FastAPI project skeleton and health endpoint;
 - closed enums for the five intents, four allowed actions, and conversation states;
@@ -17,6 +17,9 @@ Phases 0 through 4 are implemented:
   processes;
 - a direct Gemini Interactions REST adapter with structured JSON output;
 - a separately instructed reply-review call and non-disclosing analysis service.
+- one `ConversationService` path from inbound text through guarded analysis,
+  deterministic policy, persistence, and action execution;
+- customer-facing conversation endpoints and token-protected operator controls.
 
 The LLM output is treated as an untrusted proposal. `proposed_action` is never
 executed directly. `handle_analysis` returns a policy-approved
@@ -81,11 +84,11 @@ temporarily unavailable, the service emits no reply and chooses
 transient infrastructure failure into permanent human takeover. Non-reply
 actions skip review because they cannot expose customer-facing text.
 
-Phase 4 does not expose a dialogue endpoint yet. Phase 5 will make one
-`ConversationService` the composition root from guarded analysis through the
-state machine and executor; the API will not accept a caller-supplied action or
-reply draft. Until then, calling `ActionExecutor` directly is an internal trust
-boundary, not a customer-facing path.
+Phase 5 exposes this path through one `ConversationService` composition root.
+The customer API accepts only message content; it never accepts a
+caller-supplied action, reply draft, state, history, model setting, or API key.
+Calling `ActionExecutor` directly remains an internal trust boundary, not a
+customer-facing path.
 
 The primary disclosure defense is data minimization: the model input contains
 a small public capability summary and no credentials, private price floors,
@@ -120,8 +123,90 @@ top-level `response_format` contract: [Interactions API reference](https://ai.go
 [API versions](https://ai.google.dev/gemini-api/docs/api-versions), and
 [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output).
 
-A dialogue endpoint/UI and adversarial execution evidence are intentionally
-deferred to Phases 5–8.
+A browser UI and adversarial execution evidence are intentionally deferred to
+Phases 6–8.
+
+## Phase 5 conversation API
+
+The API surface is deliberately small:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Process health; does not require Gemini configuration. |
+| `POST` | `/conversations/{customer_id}/messages` | Submit one customer message through the complete guarded path. |
+| `GET` | `/conversations/{customer_id}` | Read an existing conversation snapshot and recent action outcomes. |
+| `POST` | `/operator/conversations/{customer_id}/reactivate` | Return a human-takeover conversation to active handling. |
+| `POST` | `/operator/demo/reset` | Clear local demo sessions and action events. |
+
+The message request body contains only `message`:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/conversations/demo-001/messages \
+  -H 'Content-Type: application/json' \
+  --data '{"message":"What can your lead-qualification product do?"}'
+```
+
+A turn response reports `customer_id`, validated `intent` and
+`is_dissatisfied`, the policy-approved `action`, execution `outcome`,
+`message_sent`, the customer-visible `reply` when one was actually sent, and
+the persisted `status`, `issue_streak`, and `revision`. A stale concurrent turn
+returns the same response shape with HTTP 409. The snapshot endpoint accepts an
+optional `event_limit` query parameter from 1 to 200 (default 50) and returns
+the state plus recent events containing only event ID, action, outcome, and
+timestamp. Neither response includes analysis notes, review details,
+state-machine reasons, model requests, or raw model output.
+
+Both operator endpoints require the `X-Operator-Token` request header. Configure
+the expected value with the server-side `OPERATOR_TOKEN` environment variable;
+do not place it in a JSON body or URL:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/operator/demo/reset \
+  -H "X-Operator-Token: $OPERATOR_TOKEN"
+
+curl -sS -X POST \
+  http://127.0.0.1:8000/operator/conversations/demo-001/reactivate \
+  -H "X-Operator-Token: $OPERATOR_TOKEN"
+```
+
+A missing or incorrect supplied token returns HTTP 401. If the server has no
+`OPERATOR_TOKEN` configured, operator controls return a generic HTTP 503.
+
+`GEMINI_API_KEY` is read only from the server environment. If it is absent,
+the process still starts: `/health` and queries for already persisted
+conversations remain available. Messages for a new or `active` conversation
+return a generic `503 Service Unavailable` response without credential values
+or exception details, and a new customer does not leave an empty session
+behind; an existing `human_takeover` or `closed_not_interested` conversation
+still returns its deterministic silent result before any model call.
+
+### Suggested live demonstration
+
+1. Start the service with `GEMINI_API_KEY` and `OPERATOR_TOKEN` loaded from the
+   ignored local `.env`, then verify `/health`.
+2. Reset demo state with the token-protected reset endpoint.
+3. Submit a normal product question and inspect the sent reply and active
+   status.
+4. Submit another reply-producing message within 60 seconds to demonstrate the
+   per-customer rolling limit.
+5. Submit two consecutive off-topic or dissatisfied turns to enter
+   `human_takeover`, then submit one more message to demonstrate silence.
+6. Query the conversation, reactivate it through the operator endpoint, and
+   submit a final normal message.
+
+Live HTTP verification on 2026-09-02 returned 200 from `/health`; the first
+customer message was analyzed by Gemini, passed the independent reply review,
+and produced `sent`. A second reply attempt about 16 seconds later produced
+`rate_limited` with `reply: null`. The snapshot showed the `sent` and
+`rate_limited` events, and the token-protected reset deleted one session and
+two events.
+
+Phase 5 intentionally does not persist a complete conversation transcript.
+The current model call analyzes the newest customer message without restoring
+full prior dialogue history. Session state, action outcomes, and the simulated
+outbound channel are sufficient for the constraint-focused demo; durable
+multi-turn message history is deferred rather than accepted from an
+untrusted caller.
 
 ## Local setup
 

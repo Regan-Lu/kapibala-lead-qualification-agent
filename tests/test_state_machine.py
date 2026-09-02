@@ -9,6 +9,7 @@ from lead_qualification_agent.domain import (
     ISSUE_STREAK_THRESHOLD,
     TransitionEvent,
     handle_analysis,
+    hold_inactive,
     reactivate,
 )
 
@@ -184,6 +185,11 @@ def test_non_active_state_ignores_later_model_results(status: ConversationStatus
         TransitionEvent.SILENT_HUMAN_TAKEOVER,
         TransitionEvent.SILENT_CLOSED,
     }
+
+
+def test_inactive_hold_rejects_an_active_conversation() -> None:
+    with pytest.raises(ValueError, match="active conversation"):
+        hold_inactive(ConversationState())
 
 
 def test_human_reactivation_resets_streak_and_returns_to_active() -> None:

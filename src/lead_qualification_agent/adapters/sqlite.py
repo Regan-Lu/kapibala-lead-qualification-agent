@@ -67,6 +67,12 @@ class StorageActionResult:
     detail: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class DemoResetResult:
+    sessions_deleted: int
+    events_deleted: int
+
+
 _STATUS_SQL = ", ".join(f"'{status.value}'" for status in ConversationStatus)
 _ACTION_SQL = ", ".join(f"'{action.value}'" for action in Action)
 _OUTCOME_SQL = ", ".join(f"'{outcome.value}'" for outcome in EventOutcome)
@@ -325,20 +331,86 @@ class SQLiteSessionStore:
         customer_id = self._customer_id(customer_id)
         if limit is not None and limit <= 0:
             raise ValueError("limit must be positive")
-        query = (
-            "SELECT * FROM action_events WHERE customer_id = ? "
-            "ORDER BY event_id ASC"
-        )
-        params: tuple[object, ...] = (customer_id,)
-        if limit is not None:
-            query += " LIMIT ?"
-            params += (limit,)
+        if limit is None:
+            query = (
+                "SELECT * FROM action_events WHERE customer_id = ? "
+                "ORDER BY event_id ASC"
+            )
+            params: tuple[object, ...] = (customer_id,)
+        else:
+            query = (
+                "SELECT * FROM ("
+                "SELECT * FROM action_events WHERE customer_id = ? "
+                "ORDER BY event_id DESC LIMIT ?"
+                ") ORDER BY event_id ASC"
+            )
+            params = (customer_id, limit)
         connection = self._connect()
         try:
             rows = connection.execute(query, params).fetchall()
             return tuple(self._row_to_event(row) for row in rows)
         finally:
             connection.close()
+
+    def get_snapshot(
+        self,
+        customer_id: str,
+        *,
+        event_limit: int = 50,
+    ) -> tuple[StoredSession, tuple[StoredEvent, ...]] | None:
+        """Read one session and its newest events from one SQLite snapshot."""
+
+        customer_id = self._customer_id(customer_id)
+        if event_limit <= 0:
+            raise ValueError("event_limit must be positive")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            row = connection.execute(
+                "SELECT * FROM sessions WHERE customer_id = ?",
+                (customer_id,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            event_rows = connection.execute(
+                """
+                SELECT * FROM (
+                    SELECT * FROM action_events
+                    WHERE customer_id = ?
+                    ORDER BY event_id DESC
+                    LIMIT ?
+                )
+                ORDER BY event_id ASC
+                """,
+                (customer_id, event_limit),
+            ).fetchall()
+            session = self._row_to_session(row)
+            events = tuple(self._row_to_event(item) for item in event_rows)
+            connection.commit()
+            return session, events
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def reset_demo(self) -> DemoResetResult:
+        """Delete local demo sessions and events in one write transaction."""
+
+        with self._write_transaction() as connection:
+            events_deleted = int(
+                connection.execute("SELECT COUNT(*) FROM action_events").fetchone()[0]
+            )
+            sessions_deleted = int(
+                connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            )
+            connection.execute("DELETE FROM action_events")
+            connection.execute("DELETE FROM sessions")
+        return DemoResetResult(
+            sessions_deleted=sessions_deleted,
+            events_deleted=events_deleted,
+        )
 
     def record_event(
         self,

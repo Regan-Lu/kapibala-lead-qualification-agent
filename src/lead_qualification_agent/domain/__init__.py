@@ -15,6 +15,7 @@ from lead_qualification_agent.domain.state_machine import (
     StateTransition,
     TransitionEvent,
     handle_analysis,
+    hold_inactive,
     reactivate,
 )
 
@@ -33,5 +34,6 @@ __all__ = [
     "StateTransition",
     "TransitionEvent",
     "handle_analysis",
+    "hold_inactive",
     "reactivate",
 ]

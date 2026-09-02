@@ -103,25 +103,8 @@ def handle_analysis(
     ignored and the transition is silent.
     """
 
-    if state.status is ConversationStatus.HUMAN_TAKEOVER:
-        return StateTransition(
-            previous_state=state,
-            next_state=state,
-            event=TransitionEvent.SILENT_HUMAN_TAKEOVER,
-            effective_action=None,
-            silent=True,
-            reason="human_takeover_blocks_automatic_actions",
-        )
-
-    if state.status is ConversationStatus.CLOSED_NOT_INTERESTED:
-        return StateTransition(
-            previous_state=state,
-            next_state=state,
-            event=TransitionEvent.SILENT_CLOSED,
-            effective_action=None,
-            silent=True,
-            reason="closed_conversation_blocks_automatic_actions",
-        )
+    if state.status is not ConversationStatus.ACTIVE:
+        return hold_inactive(state)
 
     issue_detected = (
         result.intent is Intent.OFF_TOPIC or result.is_dissatisfied
@@ -199,6 +182,30 @@ def handle_analysis(
             if issue_detected
             else "normal_turn_resets_issue_streak"
         ),
+    )
+
+
+def hold_inactive(state: ConversationState) -> StateTransition:
+    """Keep a human-owned or closed conversation silent without an LLM call."""
+
+    if state.status is ConversationStatus.ACTIVE:
+        raise ValueError("an active conversation cannot use the inactive hold")
+    if state.status is ConversationStatus.HUMAN_TAKEOVER:
+        return StateTransition(
+            previous_state=state,
+            next_state=state,
+            event=TransitionEvent.SILENT_HUMAN_TAKEOVER,
+            effective_action=None,
+            silent=True,
+            reason="human_takeover_blocks_automatic_actions",
+        )
+    return StateTransition(
+        previous_state=state,
+        next_state=state,
+        event=TransitionEvent.SILENT_CLOSED,
+        effective_action=None,
+        silent=True,
+        reason="closed_conversation_blocks_automatic_actions",
     )
 
 

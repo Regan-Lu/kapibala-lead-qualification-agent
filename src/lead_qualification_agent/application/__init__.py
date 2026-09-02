@@ -3,6 +3,12 @@
 from lead_qualification_agent.application.analysis_service import (
     GuardedAnalysisService,
 )
+from lead_qualification_agent.application.conversation_service import (
+    ConversationService,
+    ConversationSnapshot,
+    ConversationTurn,
+    ModelConfigurationError,
+)
 from lead_qualification_agent.application.executor import (
     ActionExecution,
     ActionExecutor,
@@ -13,6 +19,10 @@ from lead_qualification_agent.application.executor import (
 
 __all__ = [
     "GuardedAnalysisService",
+    "ConversationService",
+    "ConversationSnapshot",
+    "ConversationTurn",
+    "ModelConfigurationError",
     "ActionExecution",
     "ActionExecutor",
     "ExecutionOutcome",
