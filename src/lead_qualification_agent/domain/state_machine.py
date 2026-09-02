@@ -5,7 +5,7 @@ external side effects.  It consumes a validated ``AnalysisResult`` and
 returns a transition that a later application layer may persist and execute.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from lead_qualification_agent.domain.models import (
@@ -40,12 +40,20 @@ class ConversationState:
 
     status: ConversationStatus = ConversationStatus.ACTIVE
     issue_streak: int = 0
+    # Persistence layers may use this optimistic-concurrency token.  It is
+    # intentionally excluded from business-state equality so Phase 2 callers
+    # can reason about status and streak independently of storage metadata.
+    revision: int = field(default=0, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, ConversationStatus):
             raise TypeError("status must be a ConversationStatus")
         if type(self.issue_streak) is not int:
             raise TypeError("issue_streak must be an integer")
+        if type(self.revision) is not int:
+            raise TypeError("revision must be an integer")
+        if self.revision < 0:
+            raise ValueError("revision must be non-negative")
         if not 0 <= self.issue_streak <= ISSUE_STREAK_THRESHOLD:
             raise ValueError(
                 f"issue_streak must be between 0 and {ISSUE_STREAK_THRESHOLD}"
@@ -130,6 +138,7 @@ def handle_analysis(
         next_state = ConversationState(
             status=ConversationStatus.HUMAN_TAKEOVER,
             issue_streak=ISSUE_STREAK_THRESHOLD,
+            revision=state.revision + 1,
         )
         return StateTransition(
             previous_state=state,
@@ -144,6 +153,7 @@ def handle_analysis(
         next_state = ConversationState(
             status=ConversationStatus.HUMAN_TAKEOVER,
             issue_streak=next_streak,
+            revision=state.revision + 1,
         )
         return StateTransition(
             previous_state=state,
@@ -158,6 +168,7 @@ def handle_analysis(
         next_state = ConversationState(
             status=ConversationStatus.CLOSED_NOT_INTERESTED,
             issue_streak=0,
+            revision=state.revision + 1,
         )
         return StateTransition(
             previous_state=state,
@@ -171,6 +182,7 @@ def handle_analysis(
     next_state = ConversationState(
         status=ConversationStatus.ACTIVE,
         issue_streak=next_streak,
+        revision=state.revision + 1,
     )
     return StateTransition(
         previous_state=state,
@@ -199,7 +211,7 @@ def reactivate(state: ConversationState) -> StateTransition:
     """
 
     if state.status is ConversationStatus.HUMAN_TAKEOVER:
-        next_state = ConversationState()
+        next_state = ConversationState(revision=state.revision + 1)
         return StateTransition(
             previous_state=state,
             next_state=next_state,
