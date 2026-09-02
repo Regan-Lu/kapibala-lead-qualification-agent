@@ -1,149 +1,132 @@
 # KapibalaAI Lead Qualification Agent
 
-A small, auditable agent that uses an LLM for lead-intent analysis while enforcing business constraints in deterministic application code.
+A minimal, auditable lead-qualification agent: Gemini interprets customer
+messages, while deterministic Python code owns every state transition and side
+effect.
 
-## Current phase
+> Core rule: model output is an untrusted **proposal**. Only the state machine's
+> `effective_action` can reach the executor.
 
-Phases 0 through 7 are implemented:
+## What is implemented
 
-- runnable FastAPI project skeleton and health endpoint;
-- closed enums for the five intents, four allowed actions, and conversation states;
-- a Pydantic contract for structured LLM analysis;
-- an asynchronous `Analyzer` port and deterministic fake;
-- a pure conversation state machine with deterministic anomaly counting,
-  takeover, silence, close, and operator reactivation transitions.
-- a SQLite session/event store and an explicit action executor;
-- an atomic rolling-window outbound gateway that is safe across worker
-  processes;
-- a direct Gemini Interactions REST adapter with structured JSON output;
-- a separately instructed reply-review call and non-disclosing analysis service.
-- one `ConversationService` path from inbound text through guarded analysis,
-  deterministic policy, persistence, and action execution;
-- customer-facing conversation endpoints and token-protected operator controls.
-- a framework-free browser demo for chat, state inspection, events, scenarios,
-  and operator actions.
-- reproducible live-model adversarial scenarios and a real multi-process
-  rolling-limit probe with public-safe evidence output.
+- Real Gemini intent classification for five intents plus the independent
+  `is_dissatisfied` signal.
+- A closed set of four actions: `reply`, `schedule_followup`,
+  `escalate_to_human`, and `mark_not_interested`.
+- A deterministic takeover state machine, per-customer rolling 60-second send
+  limit, optimistic concurrency control, and token-protected reactivation.
+- A separate structured reply-review call before any generated reply can be
+  sent.
+- FastAPI endpoints, a framework-free browser demo, SQLite persistence, and a
+  simulated outbound channel.
+- 91 deterministic tests, five live adversarial scenarios, and an eight-process
+  concurrency probe.
 
-The LLM output is treated as an untrusted proposal. `proposed_action` is never
-executed directly. `handle_analysis` returns a policy-approved
-`effective_action`; a threshold-reaching anomaly returns
-`escalate_to_human`, while a later result received in `human_takeover` or
-`closed_not_interested` returns no action and remains silent. An accepted
-`mark_not_interested` is returned once when the conversation enters the closed
-state; it is not re-opened by customer text or model output.
+The latest recorded run passed all five live scenarios with 7 analysis calls,
+5 reply-review calls, and no model-call failures. The process probe converged to
+exactly 1 `sent` and 7 `rate_limited` results. See the
+[sanitized execution evidence](evidence/phase7-adversarial-results.md).
 
-The state machine reads only the validated `AnalysisResult`, not raw customer
-text, and performs no I/O. `off_topic` and `is_dissatisfied` share one
-consecutive-issue counter; both signals in one turn count once, and a normal
-turn resets it. The second consecutive issue has priority over every model
-proposal. Its immutable `revision` is an optimistic-concurrency token for the
-persistence layer. `decision_note` is a short observability label, not
-chain-of-thought and never an authorization signal.
+## Run from zero
 
-## Phase 3 execution boundary
-
-`ActionExecutor` accepts a `StateTransition`, never a raw
-`proposed_action`. It uses an explicit branch for each of the four closed
-actions; customer text cannot name a function or tool. The SQLite store
-re-reads the session inside `BEGIN IMMEDIATE` and compares status, issue streak,
-and revision before applying a transition. A stale transition is recorded and
-cannot send.
-
-- `reply` requires an active session and a non-empty draft. `OutboundGateway`
-  atomically updates the session's `last_sent_at` only when the elapsed time is
-  at least 60 seconds (or there has never been a send), then calls the injected
-  sender. A reservation is made before the external call, so a crash sacrifices
-  one window rather than allowing a retry to duplicate a message.
-- `schedule_followup` records a scheduled event and does not consume the reply
-  window.
-- `escalate_to_human` and `mark_not_interested` record their action once and
-  update the state without sending a customer-visible reply.
-- A human-takeover or closed session returns no effective action and remains
-  silent, even if a caller fabricates a reply transition.
-
-`tests/test_concurrency.py` uses a real file-backed SQLite database, eight
-spawned processes, independent connections, and synchronized attempts. The
-test asserts that each competing customer receives exactly one successful
-outbound event. Boundary tests cover immediate retry (0 seconds), 59.9 seconds,
-and exactly 60 seconds.
-
-## Phase 4 model and disclosure boundary
-
-The project calls Gemini's stable `v1` Interactions REST endpoint directly,
-without a provider SDK or agent framework. The request contains no tools or
-function declarations.
-Customer messages and the last eight history entries are serialized into the
-untrusted `input` field; they are never interpolated into the system
-instruction. Gemini is asked for JSON matching `AnalysisResult`, and the
-response is validated again locally by Pydantic before it reaches the state
-machine.
-
-For a proposed `reply`, the `GuardedAnalysisService` path requires a second
-structured review over the customer request and candidate draft, using a
-separate instruction and `ReplyReview` contract. A blocked reply is converted
-by code into `escalate_to_human` with no draft. If analysis or review is
-temporarily unavailable, the service emits no reply and chooses
-`schedule_followup`, keeping the conversation active instead of turning a
-transient infrastructure failure into permanent human takeover. Non-reply
-actions skip review because they cannot expose customer-facing text.
-
-Phase 5 exposes this path through one `ConversationService` composition root.
-The customer API accepts only message content; it never accepts a
-caller-supplied action, reply draft, state, history, model setting, or API key.
-Calling `ActionExecutor` directly remains an internal trust boundary, not a
-customer-facing path.
-
-The primary disclosure defense is data minimization: the model input contains
-a small public capability summary and no credentials, private price floors,
-contracts, customer lists, or internal operating data. The separate review is
-a semantic second line, not a claim of perfect prompt-injection detection. Its
-known limitation is model misclassification; guarded handoff and the
-deterministic action/state boundaries limit the consequence of that error.
-
-The raw REST client uses a 30-second timeout and performs no automatic retry.
-A transient API failure therefore becomes a silent `schedule_followup` result;
-bounded retry policy is intentionally deferred beyond this phase.
-
-A live smoke script is included. It requires outbound HTTPS access to Google's
-Gemini endpoint:
+Requirements: Python 3.11+ and, for Gemini-backed message handling, a valid
+Gemini API key.
 
 ```bash
+git clone https://github.com/Regan-Lu/kapibala-lead-qualification-agent.git
+cd kapibala-lead-qualification-agent
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+
 cp .env.example .env
-# Fill GEMINI_API_KEY with a Google AI Studio authorization key, then load it
-# without printing it.
+# Fill GEMINI_API_KEY and OPERATOR_TOKEN in the ignored local .env.
 set -a
 source .env
 set +a
-python scripts/live_gemini_smoke.py
+
+python -m uvicorn lead_qualification_agent.app:app --reload
 ```
 
-Live verification on 2026-09-02 completed exactly two model calls: one intent
-analysis and one separately instructed reply review. The final result was an
-allowed `reply`. The credential remained only in the ignored local `.env`.
+Open <http://127.0.0.1:8000/>. The health check is available at
+<http://127.0.0.1:8000/health> and should return:
 
-The adapter targets Google's stable `v1` Interactions REST API and current
-top-level `response_format` contract: [Interactions API reference](https://ai.google.dev/api/interactions-api-v1),
-[API versions](https://ai.google.dev/gemini-api/docs/api-versions), and
-[structured outputs](https://ai.google.dev/gemini-api/docs/structured-output).
+```json
+{"status":"ok"}
+```
 
-The reproducible adversarial run and its reviewed results are documented in
-[`evidence/phase7-adversarial-results.md`](evidence/phase7-adversarial-results.md).
+The server and UI still start without `GEMINI_API_KEY`; health checks and
+stored-session reads remain available, while a message for a new or existing
+active conversation returns a generic 503. The Gemini key stays server-side
+and `.env` is ignored.
 
-## Phase 5 conversation API
+## Architecture
 
-The API surface is deliberately small:
+```mermaid
+flowchart LR
+    Customer["Customer / browser"] --> API["FastAPI customer API"]
+    API --> Service["ConversationService"]
+    Service -->|load persisted session| DB["SQLite transaction<br/>revision check"]
+    Service -->|active session| Guard["GuardedAnalysisService"]
+    Guard --> Analysis["Gemini analysis<br/>tool-free structured output"]
+    Analysis --> Contract["Pydantic AnalysisResult"]
+    Contract -->|reply proposal only| Review["Gemini reply review<br/>separate instruction"]
+    Review --> ReviewContract["Pydantic ReplyReview"]
+    ReviewContract -->|guard accepts or clears draft| PolicyResult["Policy-ready AnalysisResult"]
+    Review -->|failure fallback| PolicyResult
+    Contract -->|non-reply proposal| PolicyResult
+    Guard -->|analysis failure fallback| PolicyResult
+    PolicyResult --> Policy["Deterministic state machine"]
+    Service -->|inactive: skip model| Policy
+    Service -->|operator reactivation| Policy
+    Policy --> Approved["StateTransition<br/>effective_action"]
+    Approved --> Executor["ActionExecutor<br/>closed dispatch"]
+    Executor -->|non-reply state and event| DB
+    Executor -->|reply| Gateway["OutboundGateway"]
+    Gateway -->|1. prepare_reply| DB
+    DB -->|2. reservation result| Gateway
+    Gateway -->|3. reserved only| Sender["Simulated outbound sender"]
+    Sender -->|4. delivery result| Gateway
+    Gateway -->|5. finalize_outbound| DB
+    Operator["Operator API<br/>header token"] -->|reactivate| Service
+    Operator -->|demo reset| DB
+```
+
+The model has no tools. Customer text is placed in the untrusted input field,
+not interpolated into the system instruction. The active path obtains a locally
+validated analysis result, reviews reply drafts, asks the pure state machine
+for a transition, and executes only that transition. For `human_takeover` or
+closed sessions, it returns a silent transition before calling Gemini.
+
+## Hard constraints: code, mechanism, proof
+
+| Requirement | Code-level enforcement | Tests and execution evidence |
+| --- | --- | --- |
+| At most one outbound message in any rolling 60-second window per customer | [`SQLiteSessionStore.prepare_reply`](src/lead_qualification_agent/adapters/sqlite.py#L564-L669) runs inside `BEGIN IMMEDIATE` and conditionally updates `last_sent_at` only when `now - last_sent_at >= 60`. [`OutboundGateway.send`](src/lead_qualification_agent/application/executor.py#L80-L155) reserves before calling the sender. This is elapsed-time logic, not a fixed minute bucket. | [`test_rolling_window_uses_0_59_9_and_60_second_boundaries`](tests/test_actions.py#L99) covers 0/59.9/60.0 seconds. [`test_spawned_workers_share_one_reply_slot`](tests/test_concurrency.py#L106) uses 8 spawned processes and independent connections; the standalone [`run_concurrency_probe.py`](scripts/run_concurrency_probe.py) reloads stale state and reproduces 1 `sent` / 7 `rate_limited`. |
+| Two consecutive off-topic or dissatisfied turns force takeover; a validated non-issue turn resets the shared streak | [`handle_analysis`](src/lead_qualification_agent/domain/state_machine.py#L94-L185) computes one shared issue signal, increments at most once per turn, resets on a validated non-issue result, and gives the threshold priority over every model proposal. [`ConversationService`](src/lead_qualification_agent/application/conversation_service.py#L68-L123) skips Gemini entirely once the session is inactive. | [`test_state_machine.py`](tests/test_state_machine.py) covers shared counting, reset, precedence, and silence. [`test_two_consecutive_issue_turns_force_takeover_at_the_api_boundary`](tests/test_api.py#L258) proves the API path. Live scenarios 3–4 reproduce takeover and customer-side bypass failure. |
+| Customer text cannot introduce a fifth action or bypass takeover | [`Action` and `AnalysisResult`](src/lead_qualification_agent/domain/models.py#L15-L70) form a closed contract that forbids extra fields. The customer DTO accepts only `message`; the model proposal goes through `effective_action`; [`ActionExecutor`](src/lead_qualification_agent/application/executor.py#L158-L376) explicitly dispatches the four actions and blocks actions from non-active state. Reactivation exists only behind the operator route. | [`test_unknown_intent_or_action_is_rejected`](tests/test_analysis_contract.py#L101), [`test_non_active_state_cannot_be_bypassed_by_fabricated_reply_transition`](tests/test_actions.py#L217), and [`test_message_request_rejects_client_supplied_control_fields`](tests/test_api.py#L300). Live scenarios 1 and 4 attack both boundaries. |
+| Customer-visible text should not disclose system instructions or private business information | [`gemini.py`](src/lead_qualification_agent/adapters/gemini.py#L32-L70) uses a deliberately small public context and separate analysis/review instructions; [`GeminiInteractionClient.generate_json`](src/lead_qualification_agent/adapters/gemini.py#L125-L143) declares no tools and keeps system instruction separate from untrusted input. Local Pydantic validation happens in [`GeminiAnalyzer`](src/lead_qualification_agent/adapters/gemini.py#L202-L237). [`GuardedAnalysisService`](src/lead_qualification_agent/application/analysis_service.py) clears a blocked draft and proposes escalation; the state machine and executor then enter silent takeover. Public API DTOs omit prompts, notes, raw model output, and unsent drafts. | [`test_analyzer_keeps_customer_text_out_of_system_instruction`](tests/test_gemini_adapter.py#L52), [`test_blocked_reply_is_cleared_and_escalated`](tests/test_analysis_service.py#L79), and API response-boundary tests. Live scenario 2 produced no customer-visible text. This is layered risk reduction, **not** a claim of perfect semantic prompt-injection defense. |
+
+The second constraint guarantees deterministic counting and override after the
+LLM supplies validated signals; the model still decides whether a message is
+off-topic or clearly dissatisfied. An analysis-stage failure becomes a
+non-issue, silent `schedule_followup` and resets the streak. A reply-review
+failure suppresses the draft but preserves the already validated intent and
+dissatisfaction signal, so it can still contribute to forced takeover.
+
+## API and demo
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | Open the native browser demo. |
-| `GET` | `/health` | Process health; does not require Gemini configuration. |
-| `POST` | `/conversations/{customer_id}/messages` | Submit one customer message through the complete guarded path. |
-| `GET` | `/conversations/{customer_id}` | Read an existing conversation snapshot and recent action outcomes. |
-| `POST` | `/operator/conversations/{customer_id}/reactivate` | Return a human-takeover conversation to active handling. |
-| `POST` | `/operator/demo/reset` | Clear local demo sessions and action events. |
+| `GET` | `/` | Browser chat and constraint inspector |
+| `GET` | `/health` | Process health; no model key required |
+| `POST` | `/conversations/{customer_id}/messages` | Complete customer-message path |
+| `GET` | `/conversations/{customer_id}` | Persisted state and recent action outcomes |
+| `POST` | `/operator/conversations/{customer_id}/reactivate` | Reactivate `human_takeover` with `X-Operator-Token` |
+| `POST` | `/operator/demo/reset` | Clear demo state with `X-Operator-Token` |
 
-The message request body contains only `message`:
+Minimal API example:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/conversations/demo-001/messages \
@@ -151,163 +134,103 @@ curl -sS -X POST http://127.0.0.1:8000/conversations/demo-001/messages \
   --data '{"message":"What can your lead-qualification product do?"}'
 ```
 
-A turn response reports `customer_id`, validated `intent` and
-`is_dissatisfied`, the policy-approved `action`, execution `outcome`,
-`message_sent`, the customer-visible `reply` when one was actually sent, and
-the persisted `status`, `issue_streak`, and `revision`. A stale concurrent turn
-returns the same response shape with HTTP 409. The snapshot endpoint accepts an
-optional `event_limit` query parameter from 1 to 200 (default 50) and returns
-the state plus recent events containing only event ID, action, outcome, and
-timestamp. Neither response includes analysis notes, review details,
-state-machine reasons, model requests, or raw model output.
+The browser demo includes editable shortcuts for a normal question, prompt
+injection, internal-information extraction, dissatisfied turns, and takeover
+bypass. Shortcuts fill the composer but do not auto-send. The UI renders an
+Agent bubble only when the server reports both `message_sent: true` and a
+non-empty `reply`; limited, silent, stale, or failed drafts are never shown as
+sent messages.
 
-Both operator endpoints require the `X-Operator-Token` request header. Configure
-the expected value with the server-side `OPERATOR_TOKEN` environment variable;
-do not place it in a JSON body or URL:
+## Verification
+
+No Gemini credential is needed for deterministic verification:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8000/operator/demo/reset \
-  -H "X-Operator-Token: $OPERATOR_TOKEN"
-
-curl -sS -X POST \
-  http://127.0.0.1:8000/operator/conversations/demo-001/reactivate \
-  -H "X-Operator-Token: $OPERATOR_TOKEN"
-```
-
-A missing or incorrect supplied token returns HTTP 401. If the server has no
-`OPERATOR_TOKEN` configured, operator controls return a generic HTTP 503.
-
-`GEMINI_API_KEY` is read only from the server environment. If it is absent,
-the process still starts: `/health` and queries for already persisted
-conversations remain available. Messages for a new or `active` conversation
-return a generic `503 Service Unavailable` response without credential values
-or exception details, and a new customer does not leave an empty session
-behind; an existing `human_takeover` or `closed_not_interested` conversation
-still returns its deterministic silent result before any model call.
-
-### Suggested live demonstration
-
-1. Start the service with `GEMINI_API_KEY` and `OPERATOR_TOKEN` loaded from the
-   ignored local `.env`, then verify `/health`.
-2. Reset demo state with the token-protected reset endpoint.
-3. Submit a normal product question and inspect the sent reply and active
-   status.
-4. Submit another reply-producing message within 60 seconds to demonstrate the
-   per-customer rolling limit.
-5. Submit two consecutive off-topic or dissatisfied turns to enter
-   `human_takeover`, then submit one more message to demonstrate silence.
-6. Query the conversation, reactivate it through the operator endpoint, and
-   submit a final normal message.
-
-Live HTTP verification on 2026-09-02 returned 200 from `/health`; the first
-customer message was analyzed by Gemini, passed the independent reply review,
-and produced `sent`. A second reply attempt about 16 seconds later produced
-`rate_limited` with `reply: null`. The snapshot showed the `sent` and
-`rate_limited` events, and the token-protected reset deleted one session and
-two events.
-
-Phase 5 intentionally does not persist a complete conversation transcript.
-The current model call analyzes the newest customer message without restoring
-full prior dialogue history. Session state, action outcomes, and the simulated
-outbound channel are sufficient for the constraint-focused demo; durable
-multi-turn message history is deferred rather than accepted from an
-untrusted caller.
-
-## Phase 6 browser demo
-
-`GET /` serves a framework-free three-file UI: `index.html`, `styles.css`, and
-`app.js`. The page combines a customer chat simulator, constraint inspector,
-persisted event list, editable scenario shortcuts, and operator controls.
-Scenario buttons only fill the composer; the user still decides whether to
-send. After starting the service, open `http://127.0.0.1:8000/`.
-
-The operator token uses a password input and is sent only in the
-`X-Operator-Token` header for operator requests. The UI does not write it to
-local storage, session storage, or cookies, and clears the field when the page
-is shown. Conversation bubbles are likewise page-local.
-
-The transcript renders an Agent bubble only when the API returns both
-`message_sent: true` and a non-empty `reply`. Rate limiting, scheduling,
-escalation, closure, silence, stale results, and failures are rendered as
-system/status messages instead of simulated Agent speech. An HTTP 409 displays
-the stale-state result and refreshes the snapshot; it never automatically
-replays the customer message. Global demo reset asks for confirmation and is
-intended for use only while no other request is in flight.
-
-The three web assets are included in the installed distribution through
-setuptools package-data and served from the package directory.
-
-On 2026-09-02 the page was exercised against the live local service in a
-browser. A public product question produced a reviewed `sent` reply; a second
-reply-producing question 24 seconds later produced `rate_limited`,
-`message_sent: false`, and no Agent bubble. The persisted event list showed
-both outcomes. The default desktop layout and a 390 x 844 viewport rendered
-without clipping or console errors.
-
-## Phase 7 adversarial evidence
-
-The live suite exercises unauthorized-action injection, internal-information
-extraction, consecutive dissatisfied turns, customer-side takeover bypass,
-and the 59.9/60-second rolling-window boundary. It uses the configured Gemini
-model through the complete API path, a temporary SQLite database, and a
-controllable application clock. It does not mutate the browser demo database.
-
-```bash
-set -a
-source .env
-set +a
-python scripts/run_adversarial_scenarios.py
-```
-
-Its JSON output contains only validated response fields plus whether a reply
-was present and its character count. Generated reply text, model requests,
-decision notes, review notes, credentials, exception details, and local paths
-are not printed. Live classifications can vary as the hosted model changes;
-a scenario-level `FAIL` means the exact target observation was not reproduced
-in that run, not automatically that a deterministic constraint was bypassed.
-
-The separate concurrency probe needs no model credential. It synchronizes
-eight spawned processes, each with an independent SQLite connection, then
-routes every attempt through the real `ActionExecutor` and `OutboundGateway`:
-
-```bash
+pytest -q
 python scripts/run_concurrency_probe.py
 ```
 
-Transient stale revisions are retried from freshly loaded state and reported
-separately from the terminal result. A passing run must converge to exactly one
-`sent`, seven `rate_limited`, and one `message_sent: true`. This isolates the
-code-level limiter from nondeterministic model choices while still attacking
-the actual persistence and sending boundary.
-
-On 2026-09-02 the live suite passed all five scenarios with seven analysis
-calls and five reply-review calls, with no model-call failures. The
-multi-process probe produced one sent turn and seven rate-limited turns, with
-zero duplicate sends, and the full deterministic suite reported 91 passed.
-Exact prompts, public response fields, the initially ambiguous observations
-that were corrected, and known limits are recorded in the linked evidence
-document.
-
-## Local setup
+With the ignored local `.env` loaded, reproduce the live model checks:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-uvicorn lead_qualification_agent.app:app --reload
+python scripts/live_gemini_smoke.py
+python scripts/run_adversarial_scenarios.py
 ```
 
-Open `http://127.0.0.1:8000/health` and expect:
+The adversarial runner records only public response fields and aggregate call
+counts. It does not print generated replies, raw requests or responses,
+internal notes, exception details, credentials, environment values, or local
+paths. Hosted model choices can vary; deterministic tests are the proof of code
+invariants, while the live run is execution evidence for the tested
+conversations.
 
-```json
-{"status":"ok"}
-```
+## Why this stack
 
-Run tests with:
+- **Python + FastAPI + Pydantic:** fast to build, typed at external boundaries,
+  and easy to test without hiding control flow.
+- **Direct Gemini REST integration:** the task needs one structured analysis
+  call and, only for a reply proposal, a second structured review—not a general
+  agent runtime. Avoiding LangChain keeps prompt, schema, retry, and tool
+  behavior visible and auditable.
+- **SQLite:** sufficient for a local assessment and real same-host process
+  contention. Each operation opens its own connection; writes use WAL,
+  `BEGIN IMMEDIATE`, a state revision check, and one conditional slot update.
+- **Vanilla browser UI:** no frontend build chain is needed to inspect state,
+  events, and operator actions.
 
-```bash
-pytest
-```
+SQLite is not presented as a cross-machine production database. With Postgres,
+the same invariant becomes one transaction using a row lock or an atomic
+conditional `UPDATE ... RETURNING`, plus revision-based compare-and-set. Its
+time predicate should use database-server time—for example,
+`last_sent_at <= transaction_timestamp() - interval '60 seconds'`—rather than
+unsynchronized worker clocks. Postgres then lets independent hosts coordinate
+against one server while preserving the same policy boundary.
 
-Never commit `.env` or a real API key. The repository ignores `.env` from its
-first commit.
+## Deliberate trade-offs and omitted scope
+
+- Outbound delivery is simulated. Reserving before the sender favors duplicate
+  suppression: a sender failure or crash consumes one window. It does not prove
+  exactly-once delivery; a production integration needs an outbox, idempotency
+  key, and provider reconciliation.
+- Full conversation transcripts are not persisted or restored. The state
+  machine is multi-turn, but the current Gemini call receives only the newest
+  message from `ConversationService`.
+- Analysis and reply review are separate calls with separate instructions and
+  contracts, but use the same Gemini provider/model; they are not independent
+  models.
+- The application does not inject server-held credentials, private prices,
+  contracts, or customer lists into model context. Separation, structured
+  validation, and pre-send review add further risk reduction, but cannot
+  guarantee that every semantic attack will be classified correctly.
+- The customer-facing demo response exposes intent, action, status, streak,
+  revision, and event outcomes for assessment observability. Production would
+  split this operator detail from the customer response.
+- The operator token and global reset are demo controls, not production-grade
+  identity, authorization, tenant isolation, or audit policy.
+- `schedule_followup` currently records an event; it is not a durable scheduler.
+  Automatic retry, durable follow-up execution, real IM integration,
+  deployment, and production observability were intentionally left out to keep
+  the submission focused on the four required invariants.
+
+## AI use, ownership, and actual time
+
+This is a solo submission. Codex was used as a coding agent for requirement
+decomposition, implementation drafts, tests, review, and documentation; it is
+not a second candidate. I remained responsible for scope and acceptance, ran
+the deterministic and live checks, inspected browser behavior, and retained
+only results that could be reproduced. The first adversarial run exposed
+ambiguous test wording and insufficient observability; the runner was revised
+to count model-stage failures without retaining sensitive text, then rerun
+successfully. Details are in [COLLAB.md](COLLAB.md).
+
+Estimated active effort was approximately **12–15 hours across two calendar
+days**. This is a retrospective range because no independent stopwatch was
+running. The verifiable Git author-timestamp span from the first
+commit (2026-09-01 23:26:05 +08:00) to the Phase 7 evidence commit
+(2026-09-02 22:39:16 +08:00) is **23 hours 13 minutes**. That elapsed window
+includes an overnight break, model waiting, browser acceptance, and
+documentation; it is not claimed as 23 hours of continuous keyboard time.
+
+For a compact presentation script, code navigation, likely questions, and
+honest claim boundaries, see the
+[Chinese defense guide](docs/DEFENSE_GUIDE.zh-CN.md).
