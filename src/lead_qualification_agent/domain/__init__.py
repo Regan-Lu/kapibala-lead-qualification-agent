@@ -6,6 +6,8 @@ from lead_qualification_agent.domain.models import (
     ConversationStatus,
     Intent,
     MessageRole,
+    ReplyReview,
+    ReplyRisk,
 )
 from lead_qualification_agent.domain.state_machine import (
     ISSUE_STREAK_THRESHOLD,
@@ -24,6 +26,8 @@ __all__ = [
     "ConversationStatus",
     "Intent",
     "MessageRole",
+    "ReplyReview",
+    "ReplyRisk",
     "ISSUE_STREAK_THRESHOLD",
     "ConversationState",
     "StateTransition",

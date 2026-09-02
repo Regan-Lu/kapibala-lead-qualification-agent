@@ -4,7 +4,7 @@ A small, auditable agent that uses an LLM for lead-intent analysis while enforci
 
 ## Current phase
 
-Phases 0, 1, 2, and 3 are complete:
+Phases 0 through 4 are implemented:
 
 - runnable FastAPI project skeleton and health endpoint;
 - closed enums for the five intents, four allowed actions, and conversation states;
@@ -14,7 +14,9 @@ Phases 0, 1, 2, and 3 are complete:
   takeover, silence, close, and operator reactivation transitions.
 - a SQLite session/event store and an explicit action executor;
 - an atomic rolling-window outbound gateway that is safe across worker
-  processes.
+  processes;
+- a direct Gemini Interactions REST adapter with structured JSON output;
+- a separately instructed reply-review call and non-disclosing analysis service.
 
 The LLM output is treated as an untrusted proposal. `proposed_action` is never
 executed directly. `handle_analysis` returns a policy-approved
@@ -59,8 +61,63 @@ test asserts that each competing customer receives exactly one successful
 outbound event. Boundary tests cover immediate retry (0 seconds), 59.9 seconds,
 and exactly 60 seconds.
 
-Live LLM integration, a dialogue endpoint/UI, and adversarial execution
-evidence are intentionally deferred to Phases 4–8.
+## Phase 4 model and disclosure boundary
+
+The project calls Gemini's stable `v1` Interactions REST endpoint directly,
+without a provider SDK or agent framework. The request contains no tools or
+function declarations.
+Customer messages and the last eight history entries are serialized into the
+untrusted `input` field; they are never interpolated into the system
+instruction. Gemini is asked for JSON matching `AnalysisResult`, and the
+response is validated again locally by Pydantic before it reaches the state
+machine.
+
+For a proposed `reply`, the `GuardedAnalysisService` path requires a second
+structured review over the customer request and candidate draft, using a
+separate instruction and `ReplyReview` contract. A blocked reply is converted
+by code into `escalate_to_human` with no draft. If analysis or review is
+temporarily unavailable, the service emits no reply and chooses
+`schedule_followup`, keeping the conversation active instead of turning a
+transient infrastructure failure into permanent human takeover. Non-reply
+actions skip review because they cannot expose customer-facing text.
+
+Phase 4 does not expose a dialogue endpoint yet. Phase 5 will make one
+`ConversationService` the composition root from guarded analysis through the
+state machine and executor; the API will not accept a caller-supplied action or
+reply draft. Until then, calling `ActionExecutor` directly is an internal trust
+boundary, not a customer-facing path.
+
+The primary disclosure defense is data minimization: the model input contains
+a small public capability summary and no credentials, private price floors,
+contracts, customer lists, or internal operating data. The separate review is
+a semantic second line, not a claim of perfect prompt-injection detection. Its
+known limitation is model misclassification; guarded handoff and the
+deterministic action/state boundaries limit the consequence of that error.
+
+The raw REST client uses a 30-second timeout and performs no automatic retry.
+A transient API failure therefore becomes a silent `schedule_followup` result;
+bounded retry policy is intentionally deferred beyond this phase.
+
+A live smoke script is included. It requires outbound HTTPS access to Google's
+Gemini endpoint:
+
+```bash
+cp .env.example .env
+# Fill GEMINI_API_KEY with a Google AI Studio authorization key, then load it
+# without printing it.
+set -a
+source .env
+set +a
+python scripts/live_gemini_smoke.py
+```
+
+The adapter targets Google's stable `v1` Interactions REST API and current
+top-level `response_format` contract: [Interactions API reference](https://ai.google.dev/api/interactions-api-v1),
+[API versions](https://ai.google.dev/gemini-api/docs/api-versions), and
+[structured outputs](https://ai.google.dev/gemini-api/docs/structured-output).
+
+A dialogue endpoint/UI and adversarial execution evidence are intentionally
+deferred to Phases 5–8.
 
 ## Local setup
 
@@ -83,4 +140,5 @@ Run tests with:
 pytest
 ```
 
-Copy `.env.example` to `.env` only when live LLM integration is added. Never commit the real API key.
+Never commit `.env` or a real API key. The repository ignores `.env` from its
+first commit.

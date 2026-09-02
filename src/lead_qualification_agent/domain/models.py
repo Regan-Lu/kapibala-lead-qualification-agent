@@ -30,6 +30,12 @@ class MessageRole(StrEnum):
     AGENT = "agent"
 
 
+class ReplyRisk(StrEnum):
+    SAFE = "safe"
+    INTERNAL_DISCLOSURE = "internal_disclosure"
+    UNSUPPORTED_CLAIM = "unsupported_claim"
+
+
 class ContractModel(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -61,4 +67,16 @@ class AnalysisResult(ContractModel):
             raise ValueError("reply_draft is required when proposed_action is reply")
         if self.proposed_action is not Action.REPLY and self.reply_draft is not None:
             raise ValueError("reply_draft is only allowed when proposed_action is reply")
+        return self
+
+
+class ReplyReview(ContractModel):
+    allowed: StrictBool
+    risk: ReplyRisk
+    decision_note: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_risk_matches_decision(self) -> Self:
+        if self.allowed != (self.risk is ReplyRisk.SAFE):
+            raise ValueError("only a safe reply can be allowed")
         return self

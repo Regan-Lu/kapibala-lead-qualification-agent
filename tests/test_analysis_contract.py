@@ -9,6 +9,8 @@ from lead_qualification_agent.domain import (
     ConversationStatus,
     Intent,
     MessageRole,
+    ReplyReview,
+    ReplyRisk,
 )
 
 
@@ -192,3 +194,22 @@ def test_analyzer_input_is_immutable_and_strips_customer_text() -> None:
     assert request.customer_message == "Please tell me more."
     with pytest.raises(ValidationError):
         request.customer_message = "mutated"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("allowed", "risk"),
+    [
+        (True, ReplyRisk.INTERNAL_DISCLOSURE),
+        (False, ReplyRisk.SAFE),
+    ],
+)
+def test_reply_review_decision_must_match_risk(
+    allowed: bool,
+    risk: ReplyRisk,
+) -> None:
+    with pytest.raises(ValidationError, match="only a safe reply"):
+        ReplyReview(
+            allowed=allowed,
+            risk=risk,
+            decision_note="inconsistent_review",
+        )

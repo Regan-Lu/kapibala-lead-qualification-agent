@@ -1,5 +1,8 @@
 """Application services for policy-approved action execution."""
 
+from lead_qualification_agent.application.analysis_service import (
+    GuardedAnalysisService,
+)
 from lead_qualification_agent.application.executor import (
     ActionExecution,
     ActionExecutor,
@@ -9,6 +12,7 @@ from lead_qualification_agent.application.executor import (
 )
 
 __all__ = [
+    "GuardedAnalysisService",
     "ActionExecution",
     "ActionExecutor",
     "ExecutionOutcome",
