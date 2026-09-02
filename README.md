@@ -111,6 +111,10 @@ set +a
 python scripts/live_gemini_smoke.py
 ```
 
+Live verification on 2026-09-02 completed exactly two model calls: one intent
+analysis and one separately instructed reply review. The final result was an
+allowed `reply`. The credential remained only in the ignored local `.env`.
+
 The adapter targets Google's stable `v1` Interactions REST API and current
 top-level `response_format` contract: [Interactions API reference](https://ai.google.dev/api/interactions-api-v1),
 [API versions](https://ai.google.dev/gemini-api/docs/api-versions), and
